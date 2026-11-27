@@ -8,40 +8,34 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 )
 
 type worker struct {
-	mu     sync.Mutex
 	input  io.WriteCloser
 	output io.ReadCloser
 }
 
-func (w *worker) call(payload []byte) ([]byte, time.Duration, error) {
-	queued := time.Now()
-	w.mu.Lock()
-	queueTime := time.Since(queued)
-	defer w.mu.Unlock()
+func (w *worker) call(payload []byte) ([]byte, error) {
 	var size [4]byte
 	binary.LittleEndian.PutUint32(size[:], uint32(len(payload)))
 	if _, err := w.input.Write(size[:]); err != nil {
-		return nil, queueTime, err
+		return nil, err
 	}
 	if _, err := w.input.Write(payload); err != nil {
-		return nil, queueTime, err
+		return nil, err
 	}
 	if _, err := io.ReadFull(w.output, size[:]); err != nil {
-		return nil, queueTime, err
+		return nil, err
 	}
 	result := make([]byte, binary.LittleEndian.Uint32(size[:]))
 	_, err := io.ReadFull(w.output, result)
-	return result, queueTime, err
+	return result, err
 }
 
 func main() {
-	workers := make([]*worker, 4)
-	for i := range workers {
+	available := make(chan *worker, 4)
+	for range cap(available) {
 		process := exec.Command("/home/hc/hc_vision_api/bin/tensorrt_worker", "/home/hc/weights_fp16.engine")
 		input, err := process.StdinPipe()
 		if err != nil {
@@ -54,10 +48,8 @@ func main() {
 		if err = process.Start(); err != nil {
 			panic(err)
 		}
-		workers[i] = &worker{input: input, output: output}
+		available <- &worker{input: input, output: output}
 	}
-	var lock sync.Mutex
-	next := 0
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"status":"ok","backend":"go-cpp-tensorrt"}`)
@@ -73,17 +65,22 @@ func main() {
 			http.Error(w, "body must be base64 image", 400)
 			return
 		}
-		lock.Lock()
-		index := next % len(workers)
-		next++
-		lock.Unlock()
+		queued := time.Now()
+		var selected *worker
+		select {
+		case selected = <-available:
+		case <-r.Context().Done():
+			return
+		}
+		queueTime := time.Since(queued)
 		started := time.Now()
-		result, queueTime, err := workers[index].call(image)
+		result, err := selected.call(image)
+		workerTime := time.Since(started)
+		available <- selected
 		if err != nil {
 			http.Error(w, err.Error(), 503)
 			return
 		}
-		workerTime := time.Since(started) - queueTime
 		w.Header().Set("Server-Timing", fmt.Sprintf("queue;dur=%.2f, worker;dur=%.2f",
 			float64(queueTime)/float64(time.Millisecond), float64(workerTime)/float64(time.Millisecond)))
 		w.Header().Set("Content-Type", "application/json")
