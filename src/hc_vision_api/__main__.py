@@ -1,0 +1,20 @@
+"""Command-line entry point."""
+
+import uvicorn
+
+from .config import Settings
+
+
+def main() -> None:
+    settings = Settings.from_constants()
+    uvicorn.run(
+        "hc_vision_api.app:app",
+        host=settings.host,
+        port=settings.port,
+        workers=1,
+    )
+
+
+if __name__ == "__main__":
+    main()
+
