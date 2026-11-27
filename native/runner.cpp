@@ -1,6 +1,4 @@
 #include "runner.hpp"
-#include <algorithm>
-#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -68,13 +66,9 @@ Runner::~Runner() {
 std::string Runner::infer(const std::vector<unsigned char>& bytes) {
   cv::Mat original = cv::imdecode(bytes, cv::IMREAD_COLOR);
   if (original.empty()) return R"({"predictions":[],"error":"invalid_image"})";
-  const double gain = std::min(double(width_) / original.cols, double(height_) / original.rows);
-  const int resizedWidth = std::max(1, int(std::nearbyint(original.cols * gain)));
-  const int resizedHeight = std::max(1, int(std::nearbyint(original.rows * gain)));
-  const cv::Rect content((width_ - resizedWidth) / 2, (height_ - resizedHeight) / 2,
-                         resizedWidth, resizedHeight);
-  cv::Mat input(height_, width_, CV_8UC3, cv::Scalar(114, 114, 114));
-  cv::resize(original, input(content), content.size(), 0, 0, cv::INTER_LINEAR);
+  const cv::Rect content(0, 0, width_, height_);
+  cv::Mat input;
+  cv::resize(original, input, content.size(), 0, 0, cv::INTER_LINEAR);
   cv::Mat blob = cv::dnn::blobFromImage(input, 1.0 / 255, {}, {}, true);
   std::vector<float> detections(channels * candidates), prototypes(maskChannels * maskSize * maskSize);
   try {
